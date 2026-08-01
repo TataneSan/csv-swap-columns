@@ -1,53 +1,98 @@
 # csv-swap-columns
 
-Swap two columns of a CSV file, addressed by header name or 1-based index.
-Headers are swapped too; short rows are padded.
+![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-Pure Python standard library. No dependencies.
+Échange deux colonnes d'un CSV, désignées par nom (via le header) ou par index 0-based. Utile pour réordonner un export avant import dans un outil qui impose un ordre de colonnes fixe.
 
-## Features
+Zéro dépendance, Python standard uniquement.
 
-- Swap columns by name or 1-based index (`--columns a,c` or `--columns 1,3`)
-- Keeps all rows aligned, pads ragged rows to the header width
-- Custom delimiter (`--delimiter ';'`)
-- `--check` self-verification mode (swap twice, compare to original)
-- `--json` machine-readable report
-- Reads stdin when the file is omitted or `-`
+## Fonctionnalités
 
-## Install
+- Sélection par nom de colonne (défaut) ou par index avec `--index`
+- Support des CSV sans header via `--no-header --index`
+- Lignes de longueur variable : pad/truncate automatique, ou `--strict` pour les rejeter
+- Séparateur configurable (`-d ';'`, tab...)
+- Mode `--check` CI : exit 2 pour valider que le swap s'appliquerait (dry-run structurel)
+- Rapport `--json` : index résolus, nombre de lignes, header après permutation
+
+## Installation
 
 ```bash
 pip install .
-# or directly from GitHub
+# ou directement depuis GitHub
 pip install git+https://github.com/TataneSan/csv-swap-columns.git
 ```
 
 ## Usage
 
-```bash
-csv-swap-columns --columns first,last people.csv
-csv-swap-columns --columns 1,3 --delimiter ';' data.csv
-cat data.csv | csv-swap-columns --columns 2,4 -
-csv-swap-columns --columns a,b --check data.csv   # CI self-check
-csv-swap-columns --columns a,b --json data.csv    # report only
+```text
+csv-swap-columns --col1 X --col2 Y [--index] [--no-header] [-d D] [--strict] [--check] [--json] [-q] [INPUT]
 ```
 
-## Example
+| Option | Description |
+|---|---|
+| `--col1`, `--col2` | Colonnes à échanger (obligatoires, différentes) |
+| `--index` | Interprète `col1`/`col2` comme des index 0-based |
+| `--no-header` | CSV sans header (impose `--index`) |
+| `-d, --delimiter` | Séparateur CSV (défaut `,`) |
+| `--strict` | Erreur si une ligne n'a pas le même nombre de colonnes que le header |
+| `--check` | CI : n'écrit rien, exit 2 si le swap s'appliquerait |
+| `--json` | Rapport JSON au lieu du CSV permuté |
+| `INPUT` | Fichier d'entrée ; `-` ou omis = stdin |
+
+## Exemples
+
+Par nom de colonne :
 
 ```bash
-$ printf 'a,b,c\n1,2,3\n' | csv-swap-columns --columns a,c -
+$ printf 'id,name,email\n1,alice,a@x.com\n' | csv-swap-columns --col1 name --col2 email -
+id,email,name
+1,a@x.com,alice
+```
+
+Par index :
+
+```bash
+$ printf 'a,b,c\n1,2,3\n' | csv-swap-columns --col1 0 --col2 2 --index -
 c,b,a
 3,2,1
 ```
 
+CSV sans header :
+
+```bash
+$ printf '1,2,3\n4,5,6\n' | csv-swap-columns --no-header --index --col1 0 --col2 1 -
+2,1,3
+5,4,6
+```
+
+Mode CI :
+
+```bash
+$ printf 'a,b\n1,2\n' | csv-swap-columns --col1 a --col2 b --check -
+colonnes 0 et 1 seraient permutees sur 2 ligne(s)
+$ echo $?
+2
+```
+
+Colonne introuvable → erreur explicite :
+
+```bash
+$ printf 'a,b\n' | csv-swap-columns --col1 z --col2 b -
+erreur: colonne 'z' introuvable dans le header ['a', 'b']
+$ echo $?
+1
+```
+
 ## Exit codes
 
-| Code | Meaning                               |
-| ---: | ------------------------------------- |
-|    0 | Success                               |
-|    1 | I/O, CLI or CSV parse error           |
-|    2 | `--check` self-verification failed    |
+| Code | Signification |
+|---|---|
+| 0 | Succès (swap effectué, ou `--check` OK) |
+| 1 | Erreur I/O, CSV invalide, colonne introuvable |
+| 2 | `--check` : un swap aurait effectivement lieu |
 
-## License
+## Licence
 
-MIT
+MIT — voir [LICENSE](LICENSE).
