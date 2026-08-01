@@ -86,6 +86,7 @@ def main(argv=None):
         r.extend([""] * (width - len(r)))
 
     original = [list(r) for r in rows]
+    name_i, name_j = header[i], header[j]
     swap_rows(rows, i, j)
 
     ok = True
@@ -96,7 +97,7 @@ def main(argv=None):
 
     report = {
         "file": args.file,
-        "swapped": [header[i], header[j]],
+        "swapped": [name_i, name_j],
         "positions": [i + 1, j + 1],
         "rows": len(rows) - 1,
         "self_check_ok": ok,
