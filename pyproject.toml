@@ -1,33 +1,22 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "csv-swap-columns"
 version = "1.0.0"
-description = "Swap two columns of a CSV file by name or index."
+description = "Swap or reorder CSV columns by name or index"
 readme = "README.md"
-license = {text = "MIT"}
 requires-python = ">=3.9"
-authors = [{name = "TataneSan"}]
-keywords = ["cli", "tool"]
+license = { text = "MIT" }
+authors = [{ name = "TataneSan" }]
+keywords = ["csv", "columns", "reorder", "swap", "cli"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Utilities",
 ]
-
-[project.urls]
-Homepage = "https://github.com/TataneSan/csv-swap-columns"
 
 [project.scripts]
 csv-swap-columns = "csv_swap_columns.cli:main"
-
-[tool.setuptools.packages.find]
-include = ["csv_swap_columns*"]

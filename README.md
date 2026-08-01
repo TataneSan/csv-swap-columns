@@ -1,52 +1,81 @@
 # csv-swap-columns
 
-Swap two columns of a CSV file, selected by header name or 1-based index.
-Pure Python standard library, zero dependencies.
+Swap or reorder the columns of a CSV file **by name or 1-based index**.
+Header-aware, delimiter auto-detection, in-place rewriting, and a `--check`
+CI mode to assert a file already has the columns in the expected order.
 
 ## Features
 
-- Columns by name or index
-- Header-less files with `--no-header`
-- Delimiter auto-detection with `--delimiter auto`
-- `--check` CI mode: fails when the columns are already identical
+- `--swap A B` — exchange two columns (names or indexes)
+- `--order C1,C2,...` — full reorder; unlisted columns keep their relative
+  order at the end (`--strict` to require every column to be listed)
+- Auto-detects input delimiter (`,` `;` tab `|`), quoting-aware
+- `--no-header` mode for raw data (indexes only)
+- `--in-place` atomic rewrite, or stream to stdout for pipes
+- `--check` CI gate (exit 2 when the order doesn't match)
+- `--json` summary on stderr
 
-## Installation
+## Install
 
 ```bash
 pip install .
-# or
+# or from GitHub:
 pip install git+https://github.com/TataneSan/csv-swap-columns.git
 ```
 
+Requires Python 3.9+. No dependencies.
+
 ## Usage
 
-```bash
-csv-swap-columns data.csv name email        # by header name
-csv-swap-columns data.csv 1 3               # by index
-csv-swap-columns --no-header data.csv 1 2
-cat data.csv | csv-swap-columns - a b
-```
+Given `people.csv`:
 
-### Example
-
-```bash
-$ cat people.csv
+```csv
 name,age,city
 alice,30,paris
+bob,25,lyon
+```
 
-$ csv-swap-columns people.csv name city
-city,age,name
-paris,30,alice
+```bash
+# Swap two columns by name
+csv-swap-columns --swap name city people.csv
+# city,age,name
+# paris,30,alice
+# lyon,25,bob
+
+# Swap by index (1-based)
+csv-swap-columns --swap 1 3 people.csv
+
+# Reorder: city first, then name, the rest untouched
+csv-swap-columns --order city,name people.csv
+
+# Require every column to be listed
+csv-swap-columns --order city,age,name --strict people.csv
+
+# Rewrite the file in place
+csv-swap-columns --swap age city -i people.csv
+
+# Change output delimiter
+csv-swap-columns --order city,name -D ';' people.csv
+
+# Pipe through
+cat people.csv | csv-swap-columns --swap name age > reordered.csv
+
+# Headerless data
+printf 'a,b,c\n1,2,3\n' | csv-swap-columns --no-header --swap 1 2
+
+# CI: assert column order
+csv-swap-columns --order name,age,city --check people.csv
+echo $?   # 0 = order OK, 2 = mismatch
 ```
 
 ## Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | success |
-| 1 | I/O, CSV parsing or CLI error |
-| 2 | unknown column, out-of-range index, or `--check` failure |
+| Code | Meaning                                   |
+|------|-------------------------------------------|
+| 0    | success (or `--check` passed)             |
+| 1    | CLI / I/O error                           |
+| 2    | `--check` failed: order doesn't match     |
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
