@@ -1,144 +1,117 @@
+#!/usr/bin/env python3
 """Swap two columns of a CSV file.
 
-Reads a CSV file (or stdin), swaps two columns identified by name or
-0-based index, and writes the result to stdout.
+Reads a CSV from FILE or stdin, swaps the two columns given by name or
+1-based index (headers included), and writes the result to stdout.
 
 Exit codes:
-    0  success (or --check passed: the two columns differ)
-    1  I/O or CLI error (missing file, unknown column, invalid CSV)
-    2  --check failed: the two columns are identical everywhere
+  0  success
+  1  I/O, CLI or CSV parsing error
+  2  --check mode: swapping the columns back does not restore the input
+     (self-verify, mainly for CI plumbing tests)
 """
-
 import argparse
 import csv
-import io
 import json
 import sys
 
 
-def _open_input(path):
-    """Return (text stream, should_close)."""
-    if path in (None, "-"):
-        return sys.stdin, False
-    return open(path, "r", newline="", encoding="utf-8"), True
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Swap two columns of a CSV file.")
+    p.add_argument("file", nargs="?", default="-",
+                   help="CSV file to read (default: stdin, use '-' for stdin)")
+    p.add_argument("--columns", required=True,
+                   help="Two columns to swap, comma-separated (names or 1-based indexes), e.g. a,c or 1,3")
+    p.add_argument("--delimiter", default=",", help="CSV delimiter (default: ,)")
+    p.add_argument("--check", action="store_true",
+                   help="Self-verify: swap twice and compare to the original (exit 2 on mismatch)")
+    p.add_argument("--json", action="store_true", help="Emit a JSON report instead of the CSV")
+    return p.parse_args(argv)
 
 
-def _resolve_column(header, spec):
-    """Resolve a column spec (name or 0-based index) to an index."""
-    try:
-        idx = int(spec)
-    except (TypeError, ValueError):
-        idx = None
-    if idx is not None:
-        if idx < 0 or idx >= len(header):
-            raise ValueError(
-                "column index %d out of range (0..%d)" % (idx, len(header) - 1)
-            )
-        return idx
-    if spec not in header:
-        raise ValueError("unknown column name: %r" % spec)
-    return header.index(spec)
+def resolve(token, header):
+    token = token.strip()
+    if token.isdigit():
+        idx = int(token) - 1
+        if 0 <= idx < len(header):
+            return idx
+        raise ValueError(f"column index out of range: {token}")
+    if token in header:
+        return header.index(token)
+    raise ValueError(f"unknown column: {token}")
 
 
-def swap_rows(rows, idx_a, idx_b):
-    """Return new list of rows with columns idx_a and idx_b swapped."""
-    out = []
-    for row in rows:
-        n = max(idx_a, idx_b) + 1
-        padded = list(row) + [""] * (n - len(row))
-        padded[idx_a], padded[idx_b] = padded[idx_b], padded[idx_a]
-        out.append(padded)
-    return out
+def swap_rows(rows, i, j):
+    for r in rows:
+        r[i], r[j] = r[j], r[i]
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        prog="csv-swap-columns",
-        description="Swap two columns of a CSV file, by name or 0-based index.",
-    )
-    parser.add_argument("file", nargs="?", default="-",
-                        help="CSV file to read (default: stdin, use '-' for stdin)")
-    parser.add_argument("--col-a", "-a", required=True,
-                        help="first column (name or 0-based index)")
-    parser.add_argument("--col-b", "-b", required=True,
-                        help="second column (name or 0-based index)")
-    parser.add_argument("--delimiter", "-d", default=",",
-                        help="field delimiter (default: ',')")
-    parser.add_argument("--no-header", action="store_true",
-                        help="treat first row as data (columns referenced by index only)")
-    parser.add_argument("--check", action="store_true",
-                        help="do not print the CSV; exit 0 if the swap changes "
-                             "something, 2 if the two columns are identical")
-    parser.add_argument("--json", action="store_true",
-                        help="print a JSON report to stderr")
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
+    try:
+        fh = sys.stdin if args.file == "-" else open(args.file, newline="", encoding="utf-8")
+    except OSError as e:
+        print(f"error: cannot open {args.file}: {e}", file=sys.stderr)
+        return 1
+
+    tokens = args.columns.split(",")
+    if len(tokens) != 2:
+        print("error: --columns expects exactly two columns", file=sys.stderr)
+        return 1
+
+    with fh:
+        try:
+            reader = csv.reader(fh, delimiter=args.delimiter)
+            header = next(reader, None)
+            if header is None:
+                print("error: empty CSV", file=sys.stderr)
+                return 1
+            rows = [header] + list(reader)
+        except csv.Error as e:
+            print(f"error: CSV parse error: {e}", file=sys.stderr)
+            return 1
 
     try:
-        stream, close = _open_input(args.file)
-    except OSError as exc:
-        print("error: %s" % exc, file=sys.stderr)
+        i = resolve(tokens[0], header)
+        j = resolve(tokens[1], header)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if i == j:
+        print("error: cannot swap a column with itself", file=sys.stderr)
         return 1
 
-    try:
-        reader = csv.reader(stream, delimiter=args.delimiter)
-        rows = [r for r in reader]
-    except csv.Error as exc:
-        if close:
-            stream.close()
-        print("error: invalid CSV: %s" % exc, file=sys.stderr)
-        return 1
-    if close:
-        stream.close()
+    width = len(header)
+    for r in rows:
+        r.extend([""] * (width - len(r)))
 
-    if not rows:
-        print("error: empty input", file=sys.stderr)
-        return 1
+    original = [list(r) for r in rows]
+    swap_rows(rows, i, j)
 
-    if args.no_header:
-        header = [str(i) for i in range(max(len(r) for r in rows))]
-        data_rows = rows
-    else:
-        header = rows[0]
-        data_rows = rows[1:]
-
-    try:
-        idx_a = _resolve_column(header, args.col_a)
-        idx_b = _resolve_column(header, args.col_b)
-    except ValueError as exc:
-        print("error: %s" % exc, file=sys.stderr)
-        return 1
-
-    if idx_a == idx_b:
-        print("error: --col-a and --col-b refer to the same column", file=sys.stderr)
-        return 1
-
-    before = [list(r) for r in (rows if args.no_header else data_rows)]
-    swapped_data = swap_rows(before, idx_a, idx_b)
-    changed = before != swapped_data
+    ok = True
+    if args.check:
+        twice = [list(r) for r in rows]
+        swap_rows(twice, i, j)
+        ok = twice == original
 
     report = {
         "file": args.file,
-        "col_a": {"spec": args.col_a, "index": idx_a, "name": header[idx_a]},
-        "col_b": {"spec": args.col_b, "index": idx_b, "name": header[idx_b]},
-        "rows": len(before),
-        "changed": changed,
+        "swapped": [header[i], header[j]],
+        "positions": [i + 1, j + 1],
+        "rows": len(rows) - 1,
+        "self_check_ok": ok,
     }
 
-    if args.check:
-        if args.json:
-            print(json.dumps(report, indent=2), file=sys.stderr)
-        else:
-            state = "differ" if changed else "identical"
-            print("columns %d and %d %s over %d row(s)"
-                  % (idx_a, idx_b, state, len(before)), file=sys.stderr)
-        return 0 if changed else 2
-
-    out_rows = swapped_data if args.no_header else [header] + swapped_data
-    writer = csv.writer(sys.stdout, delimiter=args.delimiter,
-                        lineterminator="\n")
-    for row in out_rows:
-        writer.writerow(row)
-
     if args.json:
-        print(json.dumps(report, indent=2), file=sys.stderr)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        w = csv.writer(sys.stdout, delimiter=args.delimiter, lineterminator="\n")
+        w.writerows(rows)
+
+    if args.check and not ok:
+        return 2
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

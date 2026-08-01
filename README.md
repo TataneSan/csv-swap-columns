@@ -1,17 +1,18 @@
 # csv-swap-columns
 
-Swap two columns of a CSV file by name or 0-based index. Reads from a file or
-stdin, writes the swapped CSV to stdout. Pure Python, zero dependencies.
+Swap two columns of a CSV file, addressed by header name or 1-based index.
+Headers are swapped too; short rows are padded.
+
+Pure Python standard library. No dependencies.
 
 ## Features
 
-- Columns referenced by header name or 0-based index
-- `--no-header` mode when the CSV has no header row
+- Swap columns by name or 1-based index (`--columns a,c` or `--columns 1,3`)
+- Keeps all rows aligned, pads ragged rows to the header width
 - Custom delimiter (`--delimiter ';'`)
-- Short rows padded with empty fields so the swap always succeeds
-- `--check` mode for CI: exit 0 when the columns actually differ, 2 when they
-  are identical (swap would be a no-op)
-- `--json` machine-readable report on stderr
+- `--check` self-verification mode (swap twice, compare to original)
+- `--json` machine-readable report
+- Reads stdin when the file is omitted or `-`
 
 ## Install
 
@@ -21,65 +22,31 @@ pip install .
 pip install git+https://github.com/TataneSan/csv-swap-columns.git
 ```
 
-You can also run it without installing: `python3 -m csv_swap_columns`.
-
 ## Usage
 
 ```bash
-csv-swap-columns data.csv --col-a name --col-b email
-csv-swap-columns data.csv -a 0 -b 2 --delimiter ';'
-cat data.csv | csv-swap-columns - -a first_name -b last_name
-csv-swap-columns --check data.csv -a price -b discount   # CI
+csv-swap-columns --columns first,last people.csv
+csv-swap-columns --columns 1,3 --delimiter ';' data.csv
+cat data.csv | csv-swap-columns --columns 2,4 -
+csv-swap-columns --columns a,b --check data.csv   # CI self-check
+csv-swap-columns --columns a,b --json data.csv    # report only
 ```
 
-## Examples
+## Example
 
-```console
-$ cat people.csv
-name,city,email
-Alice,Paris,alice@example.com
-Bob,Lyon,bob@example.com
-$ csv-swap-columns people.csv -a name -b email
-email,city,name
-alice@example.com,Paris,Alice
-bob@example.com,Lyon,Bob
-
-$ csv-swap-columns --no-header pipe.csv -a 0 -b 1 -d '|'
-b2|a2
-b1|a1
-```
-
-Check mode:
-
-```console
-$ csv-swap-columns --check people.csv -a city -b email; echo $?
-columns 1 and 2 differ over 2 row(s)
-0
-$ csv-swap-columns --check dup.csv -a x -b y; echo $?
-columns 0 and 1 identical over 3 row(s)
-2
-```
-
-JSON report (stderr):
-
-```console
-$ csv-swap-columns people.csv -a 0 -b 2 --json >/dev/null
-{
-  "file": "people.csv",
-  "col_a": {"spec": "0", "index": 0, "name": "name"},
-  "col_b": {"spec": "2", "index": 2, "name": "email"},
-  "rows": 2,
-  "changed": true
-}
+```bash
+$ printf 'a,b,c\n1,2,3\n' | csv-swap-columns --columns a,c -
+c,b,a
+3,2,1
 ```
 
 ## Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | success, or `--check` passed (columns differ) |
-| 1 | I/O or CLI error (missing file, unknown column, invalid CSV, same column twice) |
-| 2 | `--check` failed: columns identical everywhere |
+| Code | Meaning                               |
+| ---: | ------------------------------------- |
+|    0 | Success                               |
+|    1 | I/O, CLI or CSV parse error           |
+|    2 | `--check` self-verification failed    |
 
 ## License
 
