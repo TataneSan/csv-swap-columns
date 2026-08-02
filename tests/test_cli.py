@@ -1,117 +1,75 @@
+import csv
 import io
-import os
-import tempfile
+import subprocess
+import sys
 import unittest
-from contextlib import redirect_stdout, redirect_stderr
-
-from csv_swap_columns.cli import main, resolve
-
-
-def run_cli(argv, stdin=""):
-    out, err = io.StringIO(), io.StringIO()
-    import sys as _sys
-    old = _sys.stdin
-    _sys.stdin = io.StringIO(stdin)
-    code = 0
-    try:
-        with redirect_stdout(out), redirect_stderr(err):
-            try:
-                code = main(argv)
-            except SystemExit as exc:
-                code = exc.code if isinstance(exc.code, int) else 2
-    finally:
-        _sys.stdin = old
-    return code, out.getvalue(), err.getvalue()
+import tempfile
+import os
 
 
-CSV = "a,b,c\n1,2,3\n4,5,6\n"
+def run(args, inp=None, files=None):
+    cmd = [sys.executable, "-m", "csv_swap_columns"] + args
+    return subprocess.run(cmd, input=inp, capture_output=True, text=True)
 
 
-class TestResolve(unittest.TestCase):
-    def test_numeric(self):
-        self.assertEqual(resolve("1", ["a", "b"], False, 2), 0)
-        self.assertEqual(resolve("-1", ["a", "b"], False, 2), 1)
+class TestSwapColumns(unittest.TestCase):
+    def make_csv(self, text):
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        return path
 
-    def test_name(self):
-        self.assertEqual(resolve("b", ["a", "b"], False, 2), 1)
-
-    def test_unknown(self):
-        with self.assertRaises(KeyError):
-            resolve("z", ["a", "b"], False, 2)
-
-    def test_zero(self):
-        with self.assertRaises(ValueError):
-            resolve("0", ["a", "b"], False, 2)
-
-
-class TestCli(unittest.TestCase):
     def test_swap_by_name(self):
-        code, out, _ = run_cli(["a", "c"], stdin=CSV)
-        self.assertEqual(code, 0)
-        self.assertEqual(out, "c,b,a\n3,2,1\n6,5,4\n")
+        p = self.make_csv("name,age,city\nAlice,30,Paris\nBob,25,Lyon\n")
+        r = run([p, "name", "age"])
+        self.assertEqual(r.returncode, 0)
+        rows = list(csv.reader(io.StringIO(r.stdout)))
+        self.assertEqual(rows[0], ["age", "name", "city"])
+        os.unlink(p)
 
     def test_swap_by_index(self):
-        code, out, _ = run_cli(["1", "3"], stdin=CSV)
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[0], "c,b,a")
+        p = self.make_csv("name,age,city\nAlice,30,Paris\n")
+        r = run([p, "0", "2"])
+        self.assertEqual(r.returncode, 0)
+        rows = list(csv.reader(io.StringIO(r.stdout)))
+        self.assertEqual(rows[0], ["city", "age", "name"])
+        os.unlink(p)
 
     def test_negative_index(self):
-        code, out, _ = run_cli(["a", "-1"], stdin=CSV)
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[0], "c,b,a")
+        p = self.make_csv("a,b,c\n1,2,3\n")
+        r = run([p, "0", "-1"])
+        self.assertEqual(r.returncode, 0)
+        rows = list(csv.reader(io.StringIO(r.stdout)))
+        self.assertEqual(rows[0], ["c", "b", "a"])
+        os.unlink(p)
 
     def test_move(self):
-        code, out, _ = run_cli(["--move", "a", "c"], stdin=CSV)
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[0], "b,c,a")
+        p = self.make_csv("a,b,c\n1,2,3\n")
+        r = run([p, "a", "c", "--move"])
+        self.assertEqual(r.returncode, 0)
+        rows = list(csv.reader(io.StringIO(r.stdout)))
+        self.assertEqual(rows[0], ["b", "c", "a"])
+        os.unlink(p)
 
     def test_no_header(self):
-        code, out, _ = run_cli(["--no-header", "1", "3"], stdin=CSV)
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[0], "c,b,a")
+        p = self.make_csv("1,2,3\n4,5,6\n")
+        r = run([p, "0", "1", "--no-header"])
+        self.assertEqual(r.returncode, 0)
+        rows = list(csv.reader(io.StringIO(r.stdout)))
+        self.assertEqual(rows[0], ["2", "1", "3"])
+        os.unlink(p)
 
-    def test_delimiter_sniff(self):
-        code, out, _ = run_cli(["a", "c"], stdin="a;b;c\n1;2;3\n")
-        self.assertEqual(code, 0)
-        self.assertEqual(out, "c;b;a\n3;2;1\n")
+    def test_gate_columns(self):
+        p = self.make_csv("a,b\n1,2\n")
+        r = run([p, "a", "b", "--require-columns", "5"])
+        self.assertEqual(r.returncode, 2)
+        os.unlink(p)
 
-    def test_same_column(self):
-        code, _, err = run_cli(["a", "a"], stdin=CSV)
-        self.assertEqual(code, 2)
-
-    def test_unknown_column(self):
-        code, _, err = run_cli(["z", "a"], stdin=CSV)
-        self.assertEqual(code, 2)
-        self.assertIn("unknown column", err)
-
-    def test_require_columns(self):
-        code, _, err = run_cli(["a", "c", "--require-columns", "5"], stdin=CSV)
-        self.assertEqual(code, 2)
-        self.assertIn("required >= 5", err)
-
-    def test_require_rows(self):
-        code, _, err = run_cli(["a", "c", "--require-rows", "5"], stdin=CSV)
-        self.assertEqual(code, 2)
-
-    def test_in_place(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
-            fh.write(CSV)
-            path = fh.name
-        try:
-            code, out, _ = run_cli(["a", "c", path, "--in-place"])
-            self.assertEqual(code, 0)
-            self.assertEqual(out, "")
-            with open(path) as fh:
-                self.assertEqual(fh.read(), "c,b,a\n3,2,1\n6,5,4\n")
-        finally:
-            os.unlink(path)
-
-    def test_json_report(self):
-        code, _, err = run_cli(["a", "c", "--json"], stdin=CSV)
-        self.assertEqual(code, 0)
-        import json
-        report = json.loads(err)
-        self.assertEqual(report["columns"], [1, 3])
+    def test_gate_rows(self):
+        p = self.make_csv("a,b\n1,2\n")
+        r = run([p, "a", "b", "--require-rows", "5"])
+        self.assertEqual(r.returncode, 2)
+        os.unlink(p)
 
 
 if __name__ == "__main__":

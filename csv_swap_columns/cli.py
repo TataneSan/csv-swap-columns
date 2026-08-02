@@ -1,161 +1,148 @@
 #!/usr/bin/env python3
-"""Swap or move columns of a CSV file.
+"""
+Swap or move two columns in a CSV file.
 
-Columns are selected by header name or 1-based index (negative indices count
-from the end). Default action swaps two columns; --move reinserts column A
-at column B's position.
+Columns are specified by 0-based index, negative index relative to end,
+or by header name (when the file has a header row).
 
 Exit codes:
-  0 - ok
-  1 - I/O or CLI error
-  2 - check failed (unknown column, identical columns, gate unsatisfied)
+  0  success
+  1  I/O or CLI error
+  2  gate condition not met (require-columns / require-rows)
 """
 import argparse
 import csv
-import json
 import sys
+import json
+import os
 
 
-def sniff(text):
-    sample = text[:4096]
+def sniff_dialect(sample):
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-        return dialect.delimiter
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|")
     except csv.Error:
-        return ","
+        return csv.excel
 
 
-def resolve(col, header, no_header, width):
-    """Resolve a column selector to a 0-based index. 1-based for numbers."""
-    try:
-        idx = int(col)
-    except ValueError:
-        if no_header:
-            raise ValueError(
-                "with --no-header, columns must be 1-based indices")
-        if col not in header:
-            raise KeyError(col)
-        return header.index(col)
-    if idx == 0:
-        raise ValueError("column indices are 1-based")
-    return idx - 1 if idx > 0 else width + idx
+def resolve_col(idx_or_name, header, ncols, no_header):
+    if no_header:
+        if idx_or_name.lstrip("-").isdigit():
+            idx = int(idx_or_name)
+            if idx < 0:
+                idx += ncols
+            if not (0 <= idx < ncols):
+                raise KeyError(f"index {idx_or_name} out of range")
+            return idx
+        raise KeyError(f"column '{idx_or_name}' not numeric in no-header mode")
+    else:
+        if idx_or_name.lstrip("-").isdigit():
+            idx = int(idx_or_name)
+            if idx < 0:
+                idx += ncols
+            if not (0 <= idx < ncols):
+                raise KeyError(f"index {idx_or_name} out of range")
+            return idx
+        if idx_or_name in header:
+            return header.index(idx_or_name)
+        raise KeyError(f"column '{idx_or_name}' not found in header")
+
+
+def swap_list(lst, a, b, move=False):
+    lst = list(lst)
+    if move:
+        val = lst.pop(a)
+        lst.insert(b, val)
+    else:
+        lst[a], lst[b] = lst[b], lst[a]
+    return lst
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(
-        prog="csv-swap-columns",
-        description="Swap two columns of a CSV file (or --move one).")
-    p.add_argument("col_a", help="first column (header name or 1-based index)")
-    p.add_argument("col_b", help="second column (header name or 1-based index)")
-    p.add_argument("csvfile", nargs="?", default="-",
-                   help="CSV file (default: stdin, '-' for stdin)")
-    p.add_argument("-d", "--delimiter", default=None,
-                   help="field delimiter (default: sniffed, fallback ',')")
-    p.add_argument("--move", action="store_true",
-                   help="move column A to column B's position instead of swapping")
-    p.add_argument("--no-header", action="store_true",
-                   help="treat first row as data")
-    p.add_argument("--in-place", action="store_true",
-                   help="rewrite csvfile in place (requires a real file)")
-    p.add_argument("--require-columns", type=int, metavar="N",
-                   help="exit 2 if the CSV has fewer than N columns")
-    p.add_argument("--require-rows", type=int, metavar="N",
-                   help="exit 2 if the CSV has fewer than N data rows")
-    p.add_argument("--json", action="store_true",
-                   help="emit a JSON report to stderr")
-    args = p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description="Swap or move two CSV columns by name or index."
+    )
+    parser.add_argument("file", help="CSV input file")
+    parser.add_argument("col_a", help="First column (index or name)")
+    parser.add_argument("col_b", help="Second column (index or name)")
+    parser.add_argument("--move", action="store_true",
+                        help="Move col_a to position of col_b (instead of swapping)")
+    parser.add_argument("--no-header", action="store_true",
+                        help="CSV has no header row")
+    parser.add_argument("--in-place", action="store_true",
+                        help="Rewrite the input file")
+    parser.add_argument("--require-columns", type=int, default=None, metavar="N",
+                        help="Exit 2 if column count < N")
+    parser.add_argument("--require-rows", type=int, default=None, metavar="N",
+                        help="Exit 2 if row count < N")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit JSON report")
+    args = parser.parse_args(argv)
 
     try:
-        if args.csvfile == "-":
-            text = sys.stdin.read()
-        else:
-            with open(args.csvfile, "r", encoding="utf-8", newline="") as fh:
-                text = fh.read()
-    except OSError as exc:
-        print("error: cannot read %s: %s" % (args.csvfile, exc), file=sys.stderr)
+        with open(args.file, "r", encoding="utf-8", errors="replace", newline="") as f:
+            sample = f.read(8192)
+            f.seek(0)
+            dialect = sniff_dialect(sample)
+            reader = csv.reader(f, dialect)
+            rows = list(reader)
+    except OSError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
-
-    if args.in_place and args.csvfile == "-":
-        print("error: --in-place requires a file argument", file=sys.stderr)
+    except csv.Error as e:
+        print(f"error: csv parse: {e}", file=sys.stderr)
         return 1
-
-    delimiter = args.delimiter or sniff(text)
-    rows = list(csv.reader(text.splitlines(keepends=True), delimiter=delimiter))
 
     if not rows:
         print("error: empty CSV", file=sys.stderr)
         return 1
 
-    header = [] if args.no_header else rows[0]
-    width = max(len(r) for r in rows)
-
-    if args.require_columns is not None and width < args.require_columns:
-        print("error: CSV has %d columns, required >= %d" % (width, args.require_columns),
-              file=sys.stderr)
-        return 2
-    data_rows = len(rows) if args.no_header else max(0, len(rows) - 1)
-    if args.require_rows is not None and data_rows < args.require_rows:
-        print("error: CSV has %d data rows, required >= %d" % (data_rows, args.require_rows),
-              file=sys.stderr)
-        return 2
+    header = rows[0] if not args.no_header else None
+    data = rows[1:] if not args.no_header else rows
+    ncols = len(header) if header else len(rows[0])
 
     try:
-        ia = resolve(args.col_a, header, args.no_header, width)
-        ib = resolve(args.col_b, header, args.no_header, width)
-    except ValueError as exc:
-        print("error: %s" % exc, file=sys.stderr)
+        ia = resolve_col(args.col_a, header, ncols, args.no_header)
+        ib = resolve_col(args.col_b, header, ncols, args.no_header)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
-    except KeyError as exc:
-        print("error: unknown column %s (header: %s)" % (exc, header),
-              file=sys.stderr)
-        return 2
 
-    for label, idx in (("col_a", ia), ("col_b", ib)):
-        if not (0 <= idx < width):
-            print("error: %s index %d out of range (width=%d)" % (label, idx + 1, width),
-                  file=sys.stderr)
-            return 2
-    if ia == ib:
-        print("error: both columns resolve to index %d" % (ia + 1), file=sys.stderr)
-        return 2
-
-    out_rows = []
-    for row in rows:
-        row = row + [""] * (width - len(row))
-        if args.move:
-            val = row.pop(ia)
-            row.insert(ib, val)
+    # Gates
+    if args.require_columns is not None and ncols < args.require_columns:
+        msg = f"columns {ncols} < require-columns {args.require_columns}"
+        if args.json:
+            print(json.dumps({"error": msg}, ensure_ascii=False))
         else:
-            row[ia], row[ib] = row[ib], row[ia]
-        out_rows.append(row)
+            print(msg, file=sys.stderr)
+        return 2
+    if args.require_rows is not None and len(data) < args.require_rows:
+        msg = f"rows {len(data)} < require-rows {args.require_rows}"
+        if args.json:
+            print(json.dumps({"error": msg}, ensure_ascii=False))
+        else:
+            print(msg, file=sys.stderr)
+        return 2
 
-    buf = []
-    class _Sink:
-        def write(self, s):
-            buf.append(s)
-    writer = csv.writer(_Sink(), delimiter=delimiter, lineterminator="\n")
-    for row in out_rows:
-        writer.writerow(row)
-    output = "".join(buf)
+    # Apply swap/move to every row
+    out_rows = [swap_list(r, ia, ib, move=args.move) for r in rows]
 
+    out = sys.stdout
     if args.in_place:
-        try:
-            with open(args.csvfile, "w", encoding="utf-8", newline="") as fh:
-                fh.write(output)
-        except OSError as exc:
-            print("error: cannot write %s: %s" % (args.csvfile, exc), file=sys.stderr)
-            return 1
-    else:
-        sys.stdout.write(output)
+        out = open(args.file, "w", encoding="utf-8", newline="")
+    writer = csv.writer(out, dialect)
+    writer.writerows(out_rows)
+    if args.in_place:
+        out.close()
 
     if args.json:
-        json.dump({
+        print(json.dumps({
+            "file": args.file,
+            "column_a": args.col_a,
+            "column_b": args.col_b,
             "operation": "move" if args.move else "swap",
-            "columns": [ia + 1, ib + 1],
-            "width": width,
-            "rows": len(rows),
-        }, sys.stderr)
-        sys.stderr.write("\n")
+            "rows": len(data),
+            "columns": ncols,
+        }, ensure_ascii=False, indent=2))
     return 0
 
 
