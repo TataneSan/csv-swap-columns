@@ -5,12 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "csv-swap-columns"
 version = "1.0.0"
-description = "Swap two CSV columns by name or index, with CI check mode"
+description = "swap two columns of a CSV file, header included (names or indices)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [{name = "TataneSan"}]
-keywords = ["csv", "cli", "columns", "swap", "reorder"]
 
 [project.scripts]
 csv-swap-columns = "csv_swap_columns.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["csv_swap_columns*"]
